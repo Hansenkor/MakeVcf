@@ -257,13 +257,15 @@ def main() -> None:
             in_dir = os.path.join(work_dir, "fastq")
 
     out_dir = arguments["--out_dir"]
+    if not out_dir:
+        out_dir = os.path.join(work_dir, "star_alignment")
     genome_dir = arguments["--genome_dir"]
     threads = int(arguments["--threads"])
     picard_path = arguments["--picard_path"]
 
     sort_out_dir = arguments.get("--sort_out_dir")
     if not sort_out_dir:
-        sort_out_dir = os.path.join(work_dir, "3a-2_query_name_sorted_bam")
+        sort_out_dir = os.path.join(work_dir, "star_alignment_sorted_bam")
     
     # 로거 생성 (work_dir에 로그 파일 생성)
     logger = make_logger(work_dir, name="pipeline_logger")
