@@ -1,8 +1,8 @@
 """
-3-1_Alignment.py: STAR two-pass alignment를 자동화하는 스크립트.
+Alignment.py: STAR two-pass alignment를 자동화하는 스크립트.
 
 Usage:
-  3-1_Alignment.py [--work_dir=<dir>] [--in_dir=<dir>] [--out_dir=<dir>] [--genome_dir=<dir>] [--threads=<n>] --picard_path=<dir> [--sort_out_dir=<dir>]
+  Alignment.py [--work_dir=<dir>] [--in_dir=<dir>] [--out_dir=<dir>] [--genome_dir=<dir>] [--threads=<n>] --picard_path=<dir> [--sort_out_dir=<dir>]
 
 Options:
   --work_dir=<dir>       작업 디렉토리.
@@ -206,7 +206,8 @@ class SortBam:
     @staticmethod
     def check_picard(picard_path: str, logger: logging.Logger) -> None:
         if not os.path.exists(picard_path):
-            logger.error(f"Picard 경로가 존재하지 않습니다: {picard_path}")
+            print("Error: --picard_path 옵션은 필수입니다.")
+            logger.error(f"Error: --picard_path 옵션은 필수입니다. 혹은 Picard 경로가 존재하지 않습니다: {picard_path}")
             sys.exit(1)
 
     @staticmethod

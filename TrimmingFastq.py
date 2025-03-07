@@ -1,11 +1,11 @@
 """
     date: 2025.02.28
-    object: 2_trimming.py (FASTQ 파일들에 대해 Trimmomatic trimming 분석을 자동화하는 스크립트)
+    object: Trimming.py (FASTQ 파일들에 대해 Trimmomatic trimming 분석을 자동화하는 스크립트)
     author: hansen
 
 This script requires that Java is installed and that Trimmomatic is accessible via the provided jar file.
 Usage:
-  2_trimming.py --work_dir=<dir> --in_dir=<dir> [--out_dir=<dir>] [--jar_path=<jar>] [--threads=<n>] [--adapter_fa=<path>] [--smm=<val>] [--pal=<val>] [--thr=<val>] --samples=<list> [--lead=<val>] [--trail=<val>] [--slidewin=<val>] [--minlen=<val>]
+  TrimmingFastq.py [--work_dir=<dir>] [--in_dir=<dir>] [--out_dir=<dir>] [--jar_path=<jar>] [--threads=<n>] [--adapter_fa=<path>] [--smm=<val>] [--pal=<val>] [--thr=<val>] [--samples=<list>] [--lead=<val>] [--trail=<val>] [--slidewin=<val>] [--minlen=<val>]
 
 Options:
   --work_dir=<dir>      작업 디렉토리.
@@ -29,112 +29,181 @@ Options:
 
 import os
 import sys
+import logging
 import subprocess
-import shutil
+from pytz import timezone
 from docopt import docopt# conda install -c conda-forge docopt 해야 
+from datetime import datetime
+
+
+
+def make_logger(log_dir, name="app", consoleset=True, streamset=True) -> logging.Logger:
+    """
+    Logger 생성 함수.
+    
+    - 콘솔 핸들러와 파일 핸들러를 추가하여, 로그 메시지를 콘솔 및 파일에 기록합니다.
+    - 로그 시간은 Asia/Seoul 시간대를 사용합니다.
+    """
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)
+    loggerformat = "%(asctime)s - %(name)s - %(module)s - %(levelname)s - %(message)s"
+    formatter = logging.Formatter(loggerformat)
+        
+    #  change time zone 시간대 설정
+    tz = timezone("Asia/Seoul")
+    def timetz(*args):
+        return datetime.now(tz).timetuple()
+    logging.Formatter.converter = timetz
+
+    if consoleset:
+        console = logging.StreamHandler()
+        console.setLevel(logging.INFO)
+        console.setFormatter(formatter)
+        logger.addHandler(console)
+    if streamset:
+        loggerfile = os.path.join(log_dir, name)
+        file_handler = logging.FileHandler(filename=f"{loggerfile}.log")
+        file_handler.setLevel(logging.DEBUG)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    return logger
+
+
 
 class TrimmingFastq:
     @staticmethod
-    def check_java():
+    def check_java(logger):
         """Java가 설치되어 있는지 확인합니다."""
         try:
             subprocess.run(["java", "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            logger.info("Java 설치 확인 완료.")
         except subprocess.CalledProcessError:
-            sys.stderr.write("Java가 설치되어 있지 않거나 실행할 수 없습니다.\n")
+            logger.error("Java가 설치되어 있지 않거나 실행할 수 없습니다.")
             sys.exit(1)
 
     @staticmethod
-    def check_jar(jar_path: str) -> None:
+    def check_jar(jar_path: str, logger) -> None:
         """Trimmomatic jar 파일이 존재하는지 확인합니다."""
         if not os.path.isfile(jar_path):
-            sys.stderr.write(f"Jar 파일이 존재하지 않습니다: {jar_path}\n"
-                            "Jar 파일의 경로를 확인하거나, 올바른 경로를 지정해 주세요.\n")
+            logger.error(f"Jar 파일이 존재하지 않습니다: {jar_path}\nJar 파일의 경로를 확인하거나, 올바른 경로를 지정해 주세요.")
             sys.exit(1)
+        logger.info(f"Jar 파일 확인: {jar_path}")
 
     
     @staticmethod
-    def check_in_dir(in_dir: str) -> None:
+    def check_in_dir(in_dir: str, logger) -> None:
         """입력 디렉토리가 존재하는지 확인합니다."""
         if not os.path.isdir(in_dir):
-            sys.stderr.write(f"입력 디렉토리가 존재하지 않습니다: {in_dir}\n"
-                            "in_dir 경로를 확인해 주세요.\n")
+            logger.error(f"입력 디렉토리가 존재하지 않습니다: {in_dir}\nin_dir 경로를 확인해 주세요.")
             sys.exit(1)
+        logger.info(f"입력 디렉토리 확인: {in_dir}")
 
     @staticmethod
-    def check_workdir(work_dir: str) -> None:
+    def check_workdir(work_dir: str, logger) -> None:
         """작업 디렉토리가 존재하는지 확인합니다."""
         if not os.path.isdir(work_dir):
-            sys.stderr.write(f"작업 디렉토리가 존재하지 않습니다: {work_dir}\n"
-                            "work_dir 경로를 확인해 주세요.\n")
+            TrimmingFastq.logger.error(f"작업 디렉토리가 존재하지 않습니다: {work_dir}\nwork_dir 경로를 확인해 주세요.")
             sys.exit(1)
+        logger.info(f"작업 디렉토리 확인: {work_dir}")
 
     @staticmethod
-    def check_sample_files(in_dir: str, samples: str) -> None:
+    def check_sample_files(in_dir: str, samples_str: str, logger) -> None:
         """샘플 목록에 따른 FASTQ 파일들이 존재하는지 미리 확인합니다."""
         missing_samples = []
-        for sample in samples.split():
+        for sample in samples_str.split():
             in_file1 = os.path.join(in_dir, f"{sample}_1.fastq.gz")
-            # 단일 파일 입력 여부도 확인할 수 있지만, 여기서는 기본적으로 _1 파일의 존재 여부만 확인
             if not os.path.isfile(in_file1):
                 missing_samples.append(sample)
         if missing_samples:
-            sys.stderr.write(f"다음 샘플의 FASTQ 파일이 존재하지 않습니다: {', '.join(missing_samples)}\n")
+            logger.error(f"다음 샘플의 FASTQ 파일이 존재하지 않습니다: {', '.join(missing_samples)}")
             sys.exit(1)
+        logger.info("모든 지정된 샘플의 FASTQ 파일 확인 완료.")
 
+
+    def get_samples(in_dir: str, samples_arg: str = None) -> list:
+        """
+        --samples 옵션이 제공된 경우, 해당 문자열을 공백 기준으로 분할하여 리스트 반환.
+        제공되지 않은 경우, in_dir 내의 FASTQ 파일명을 통해 샘플 리스트를 생성합니다.
+        """
+        if samples_arg:
+            TrimmingFastq.check_sample_files(in_dir, samples_arg)
+            samples = samples_arg.split()
+            logger.info(f"사용자 지정 샘플 리스트: {samples}")
+            return samples
+        else:
+            sample_files = [f for f in os.listdir(in_dir)
+                            if f.endswith("_1.fastq.gz") or f.endswith("_1_paired.fastq.gz")]
+            if not sample_files:
+                logger.error("FASTQ 파일의 형태가 sample 표시에 적합하지 않습니다.")
+                sys.exit(1)
+            
+            samples = set()
+            for f in sample_files:
+                if f.endswith("_1_paired.fastq.gz"):
+                    sample = f.replace("_1_paired.fastq.gz", "")
+                else:
+                    sample = f.replace("_1.fastq.gz", "")
+                samples.add(sample)
+            samples_list = list(samples)
+            logger.info(f"자동 생성된 샘플 리스트: {samples_list}")
+            return samples_list
+    
+    
     @staticmethod
-    def check_adapter(adapter_fa: str) -> None:
+    def check_adapter(adapter_fa: str, logger) -> None:
         """Adapter 파일이 존재하는지 확인합니다."""
         if not os.path.isfile(adapter_fa):
-            sys.stderr.write(f"Adapter 파일이 존재하지 않습니다: {adapter_fa}\n"
-                            "Adapter 파일 경로를 확인하거나, 올바른 경로를 지정해 주세요.\n")
+            TrimmingFastq.logger.error(f"Adapter 파일이 존재하지 않습니다: {adapter_fa}\nAdapter 파일 경로를 확인하거나, 올바른 경로를 지정해 주세요.")
             sys.exit(1)
-            
+        logger.info(f"Adapter 파일 확인: {adapter_fa}")
+
+    
+
+
     @staticmethod
-    def run_trimmomatic(work_dir: str, in_dir: str, out_dir: str, jar_path: str, threads: int, adapter_fa: str, smm: int, pal: int, thr: int, samples: str, lead: int, trail: int, slidewin: int, minlen: int) -> None:
+    def run_trimmomatic(work_dir: str, in_dir: str, out_dir: str, jar_path: str, threads: int,adapter_fa: str, smm: int, pal: int, thr: int, samples: list,lead: int, trail: int, slidewin: str, minlen: int, logger) -> None:
         """
         각 샘플에 대해 Trimmomatic을 실행합니다.
-        
-        각 샘플의 입력 파일은 다음과 같이 사용합니다:
-        - Paired End (PE): {in_dir}/{SAMPLE}_1.fastq.gz 와 {in_dir}/{SAMPLE}_2.fastq.gz가 모두 존재할 경우,
-            출력 파일은 {out_dir}/{SAMPLE}_1_paired.fastq.gz, {out_dir}/{SAMPLE}_1_unpaired.fastq.gz,
-                    {out_dir}/{SAMPLE}_2_paired.fastq.gz, {out_dir}/{SAMPLE}_2_unpaired.fastq.gz 로 생성됩니다.
-        - Single End (SE): {in_dir}/{SAMPLE}_1.fastq.gz 만 존재할 경우,
-            출력 파일은 {out_dir}/{SAMPLE}_trimmed.fastq.gz 로 생성됩니다.
+          - PE: {in_dir}/{SAMPLE}_1.fastq.gz와 {in_dir}/{SAMPLE}_2.fastq.gz가 모두 존재하면,
+                {out_dir}/{SAMPLE}_1_paired.fastq.gz, {out_dir}/{SAMPLE}_1_unpaired.fastq.gz,
+                {out_dir}/{SAMPLE}_2_paired.fastq.gz, {out_dir}/{SAMPLE}_2_unpaired.fastq.gz 생성.
+          - SE: {in_dir}/{SAMPLE}_1.fastq.gz만 존재하면,
+                {out_dir}/{SAMPLE}_trimmed.fastq.gz 생성.
         """
-        # out_dir이 지정되지 않았거나 빈 문자열이면 workdir/trimmed를 사용합니다.
         if not out_dir:
             out_dir = os.path.join(work_dir, "trimmed")
         os.makedirs(out_dir, exist_ok=True)
+        logger.info(f"출력 디렉토리 생성/확인: {out_dir}")
 
-        # 작업 디렉토리로 이동
         try:
             os.chdir(work_dir)
+            logger.info(f"작업 디렉토리 변경: {work_dir}")
         except Exception as exc:
-            sys.stderr.write(f"작업 디렉토리 변경 중 에러 발생: {exc}\n")
+            logger.error(f"작업 디렉토리 변경 중 에러 발생: {exc}")
             sys.exit(1)
 
-        sample_list = samples.split()
-        for sample in sample_list:
+        for sample in samples:
             in_file1 = os.path.join(in_dir, f"{sample}_1.fastq.gz")
             in_file2 = os.path.join(in_dir, f"{sample}_2.fastq.gz")
             
-            # SE trimming: _1.fastq.gz만 있을 경우
+            # Single-End (SE) 처리: _1.fastq.gz만 있을 경우
             if os.path.isfile(in_file1) and not os.path.isfile(in_file2):
                 out_file = os.path.join(out_dir, f"{sample}_trimmed.fastq.gz")
                 command = (
                     f"java -jar {jar_path} SE -threads {threads} -phred33 "
                     f"{in_file1} {out_file} "
-                    f"ILLUMINACLIP:{adapter_fa}:{smm}:0:{thr} LEADING:{lead} TRAILING:{trail} SLIDINGWINDOW:{slidewin} MINLEN:{minlen}"
+                    f"ILLUMINACLIP:{adapter_fa}:{smm}:0:{thr} LEADING:{lead} TRAILING:{trail} "
+                    f"SLIDINGWINDOW:{slidewin} MINLEN:{minlen}"
                 )
-                sys.stdout.write(f"Running Trimmomatic (SE) for sample {sample}...\n")
+                TrimmingFastq.logger.info(f"Trimmomatic (SE) 실행 중: {sample}")
                 try:
                     subprocess.run(command, shell=True, check=True)
-                    sys.stdout.write(f"{sample} (SE) has processed!\n")
+                    TrimmingFastq.logger.info(f"{sample} (SE) 처리 완료.")
                 except subprocess.CalledProcessError as error:
-                    sys.stderr.write(f"Trimmomatic 실행 중 에러 발생 ({sample}, SE): {error}\n")
+                    TrimmingFastq.logger.error(f"Trimmomatic 실행 중 에러 발생 ({sample}, SE): {error}")
                     continue
 
-            # PE trimming: _1.fastq.gz와 _2.fastq.gz 모두 존재할 경우
+            # Paired-End (PE) 처리: _1.fastq.gz와 _2.fastq.gz 모두 존재하는 경우
             elif os.path.isfile(in_file1) and os.path.isfile(in_file2):
                 out1_paired = os.path.join(out_dir, f"{sample}_1_paired.fastq.gz")
                 out1_unpaired = os.path.join(out_dir, f"{sample}_1_unpaired.fastq.gz")
@@ -145,21 +214,22 @@ class TrimmingFastq:
                     f"java -jar {jar_path} PE -threads {threads} -phred33 "
                     f"{in_file1} {in_file2} "
                     f"{out1_paired} {out1_unpaired} {out2_paired} {out2_unpaired} "
-                    f"ILLUMINACLIP:{adapter_fa}:{smm}:{pal}:{thr} LEADING:{lead} TRAILING:{trail} SLIDINGWINDOW:{slidewin} MINLEN:{minlen}"
+                    f"ILLUMINACLIP:{adapter_fa}:{smm}:{pal}:{thr} LEADING:{lead} TRAILING:{trail} "
+                    f"SLIDINGWINDOW:{slidewin} MINLEN:{minlen}"
                 )
-                sys.stdout.write(f"Running Trimmomatic (PE) for sample {sample}...\n")
+                TrimmingFastq.logger.info(f"Trimmomatic (PE) 실행 중: {sample}")
                 try:
                     subprocess.run(command, shell=True, check=True)
-                    sys.stdout.write(f"{sample} (PE) has processed!\n")
+                    TrimmingFastq.logger.info(f"{sample} (PE) 처리 완료.")
                 except subprocess.CalledProcessError as error:
-                    sys.stderr.write(f"Trimmomatic 실행 중 에러 발생 ({sample}, PE): {error}\n")
+                    TrimmingFastq.logger.error(f"Trimmomatic 실행 중 에러 발생 ({sample}, PE): {error}")
                     continue
 
             else:
-                sys.stderr.write(f"{sample}의 입력 파일이 올바르지 않습니다: {in_file1} 혹은 {in_file2}\n")
+                TrimmingFastq.logger.error(f"{sample}의 입력 파일이 올바르지 않습니다: {in_file1} 혹은 {in_file2}")
                 continue
 
-        sys.stdout.write("All done!\n")
+        TrimmingFastq.logger.info("All done!")
 
 
     """
@@ -207,30 +277,50 @@ class TrimmingFastq:
     @staticmethod
     def main() -> None:
         arguments = docopt(__doc__)
-        
-        work_dir = arguments["--work_dir"]
-        in_dir = arguments["--in_dir"]
+        # work_dir가 제공되지 않으면 현재 디렉토리를 기본값으로 사용합니다.
+        work_dir = arguments.get("--work_dir")
+        if not work_dir:
+            work_dir = os.getcwd()
+        # --in_dir 옵션이 지정되지 않으면 원본 FASTQ 디렉토리 (예: work_dir/fastq) 사용
+        in_dir = arguments.get("--in_dir")
+        if not in_dir:
+            in_dir = os.path.join(work_dir, "fastq")
+            
         out_dir = arguments["--out_dir"]
+        if not out_dir: 
+            out_dir = os.path.join(work_dir,"trimmed")
+        # work_dir = arguments.get("--work_dir") or os.getcwd()
+        # in_dir = arguments.get("--in_dir") or os.path.join(work_dir, "fastq")
+        # out_dir = arguments.get("--out_dir") or os.path.join(work_dir, "trimmed")
         jar_path = arguments["--jar_path"]
         threads = int(arguments["--threads"])
         adapter_fa = arguments["--adapter_fa"]
         smm = int(arguments["--smm"])
         pal = int(arguments["--pal"])
         thr = int(arguments["--thr"])
+        samples_arg = arguments.get("--samples")
         samples = arguments["--samples"]
         lead = int(arguments["--lead"])
         trail = int(arguments["--trail"])
         slidewin = arguments["--slidewin"]
         minlen = int(arguments["--minlen"])
         
+
+        # logger 생성 및 클래스 변수에 할당 (로그는 work_dir에 저장됨)
+        logger = make_logger(work_dir, name="TrimmingFastq")
+        TrimmingFastq.logger = logger
+        TrimmingFastq.logger.info("TrimmingFastq 분석 시작.")
+
         # 필수 도구 및 파일 존재 여부 확인
         TrimmingFastq.check_java()
         TrimmingFastq.check_adapter(adapter_fa)
         TrimmingFastq.check_jar(jar_path)
         TrimmingFastq.check_workdir(work_dir)
         TrimmingFastq.check_in_dir(in_dir)
-        TrimmingFastq.check_sample_files(in_dir, samples)
-        
+                
+        # get_samples를 호출하여 샘플 리스트를 얻음 (문자열 옵션이든 자동 생성이든)
+        samples = TrimmingFastq.get_samples(in_dir, samples_arg)
+
         TrimmingFastq.run_trimmomatic(work_dir, in_dir, out_dir, jar_path, threads, adapter_fa, smm, pal, thr, samples, lead, trail, slidewin, minlen)
 
 
